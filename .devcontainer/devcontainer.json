@@ -1,0 +1,6 @@
+{
+	"name": "io_uring_promise_container",
+	"image": "mcr.microsoft.com/devcontainers/rust:latest",
+
+	"postCreateCommand": "bash scripts/docker-startup.sh",
+}
