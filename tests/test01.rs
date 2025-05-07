@@ -14,7 +14,7 @@ fn main() -> io::Result<()> {
     // that the entry pushed into submission queue is valid (e.g. fd, buffer).
     let promises = unsafe {
         ring.submission()
-            .push_multiple(reads)
+            .push_multiple_nosync(reads)
             .expect("submission queue is full")
     };
 

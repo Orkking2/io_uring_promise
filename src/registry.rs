@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    sync::{Arc, RwLock},
+    sync::{atomic::{AtomicU64, Ordering}, Arc, RwLock},
 };
 
 use io_uring::CompletionQueue;
@@ -18,6 +18,7 @@ pub fn new_preg_ref<C: CQEM>() -> PRegRef<C> {
 
 pub struct PromiseRegistry<C: CQEM> {
     inner: RwLock<BTreeMap<u64, C>>,
+    curr_uuid: AtomicU64,
 }
 
 impl<C: CQEM> PromiseRegistry<C> {
@@ -25,7 +26,25 @@ impl<C: CQEM> PromiseRegistry<C> {
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(BTreeMap::new()),
+            curr_uuid: AtomicU64::new(0),
         }
+    }
+
+    #[inline]
+    fn next_uuid(&self) -> u64 {
+        self.curr_uuid.fetch_add(1, Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn get_uuid(&self) -> u64 {
+        let mut uuid = self.next_uuid();
+
+        // Ensure that this registry does not contain this id already
+        while self.contains_key(&uuid) {
+            uuid = self.next_uuid()
+        }
+
+        uuid
     }
 
     #[inline]
@@ -48,9 +67,11 @@ impl<C: CQEM> PromiseRegistry<C> {
         cq.sync();
 
         // Greedily aggregate (user_data, entry) pairs to minimize write lock lifetime.
-        let v = cq.into_iter()
+        let v = cq
             .map(|e| (e.user_data(), e))
             .collect::<Vec<_>>();
+
+        cq.sync();
 
         let reaped = v.len();
 

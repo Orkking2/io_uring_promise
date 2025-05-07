@@ -1,8 +1,10 @@
+pub mod cqreaper;
 pub mod pcqueue;
 pub mod promise;
 pub mod psqueue;
 pub mod registry;
-pub mod util;
+pub mod rpromise;
+pub mod rsqueue;
 
 #[rustfmt::skip]
 use squeue::Entry as SQE;
@@ -13,7 +15,6 @@ use squeue::EntryMarker as SQEM;
 use io_uring::Submitter;
 use pcqueue::PCompletionQueue;
 use psqueue::PSubmissionQueue;
-use util::get_uuid;
 
 use std::{
     io,
@@ -25,24 +26,32 @@ use io_uring::{IoUring, cqueue, squeue};
 use crate::registry::{PRegRef, new_preg_ref};
 
 pub struct PromiseIoUring<S: SQEM = SQE, C: CQEM = CQE> {
-    uring: IoUring<S, C>,
+    ring: IoUring<S, C>,
     registry: PRegRef<C>,
 }
 
 impl PromiseIoUring<SQE, CQE> {
+    #[inline]
     pub fn new(entries: u32) -> io::Result<Self> {
         IoUring::new(entries).map(<Self as From<IoUring<SQE, CQE>>>::from)
     }
 }
 
 impl<S: SQEM, C: CQEM> PromiseIoUring<S, C> {
+    #[inline]
     pub fn get_reg(&self) -> PRegRef<C> {
         self.registry.clone()
     }
 
+    #[inline]
     #[must_use]
     pub fn builder() -> PBuilder<S, C> {
         IoUring::builder().into()
+    }
+
+    #[inline]
+    pub fn reap(&mut self) -> usize {
+        self.completion().reap()
     }
 
     #[inline]
@@ -53,15 +62,10 @@ impl<S: SQEM, C: CQEM> PromiseIoUring<S, C> {
         PSubmissionQueue<'_, S, C>,
         PCompletionQueue<'_, C>,
     ) {
-        let sr = self.get_reg();
-        let cr = self.get_reg();
-
-        let (s, sq, cq) = self.deref_mut().split();
-
         (
-            s,
-            PSubmissionQueue::new(sq, sr),
-            PCompletionQueue::new(cq, cr),
+            self.submitter(),
+            unsafe { self.submission_shared() },
+            unsafe { self.completion_shared() },
         )
     }
 
@@ -72,7 +76,7 @@ impl<S: SQEM, C: CQEM> PromiseIoUring<S, C> {
 
     #[inline]
     pub unsafe fn submission_shared(&self) -> PSubmissionQueue<'_, S, C> {
-        PSubmissionQueue::new(unsafe { self.deref().submission_shared() }, self.get_reg())
+        PSubmissionQueue::new_with_reg(unsafe { self.deref().submission_shared() }, self.get_reg())
     }
 
     #[inline]
@@ -89,27 +93,31 @@ impl<S: SQEM, C: CQEM> PromiseIoUring<S, C> {
 impl<S: SQEM, C: CQEM> Deref for PromiseIoUring<S, C> {
     type Target = IoUring<S, C>;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.uring
+        &self.ring
     }
 }
 
 impl<S: SQEM, C: CQEM> DerefMut for PromiseIoUring<S, C> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.uring
+        &mut self.ring
     }
 }
 
 impl<S: SQEM, C: CQEM> Into<IoUring<S, C>> for PromiseIoUring<S, C> {
+    #[inline]
     fn into(self) -> IoUring<S, C> {
-        self.uring
+        self.ring
     }
 }
 
 impl<S: SQEM, C: CQEM> From<IoUring<S, C>> for PromiseIoUring<S, C> {
+    #[inline]
     fn from(uring: IoUring<S, C>) -> Self {
         Self {
-            uring,
+            ring: uring,
             registry: new_preg_ref(),
         }
     }
@@ -121,6 +129,7 @@ pub struct PBuilder<S: SQEM = SQE, C: CQEM = CQE> {
 }
 
 impl<S: SQEM, C: CQEM> PBuilder<S, C> {
+    #[inline]
     pub fn build(&self, entries: u32) -> io::Result<PromiseIoUring<S, C>> {
         self.inner
             .build(entries)
@@ -131,24 +140,28 @@ impl<S: SQEM, C: CQEM> PBuilder<S, C> {
 impl<S: SQEM, C: CQEM> Deref for PBuilder<S, C> {
     type Target = io_uring::Builder<S, C>;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
 impl<S: SQEM, C: CQEM> DerefMut for PBuilder<S, C> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
 }
 
 impl<S: SQEM, C: CQEM> From<io_uring::Builder<S, C>> for PBuilder<S, C> {
+    #[inline]
     fn from(inner: io_uring::Builder<S, C>) -> Self {
         Self { inner }
     }
 }
 
 impl<S: SQEM, C: CQEM> Into<io_uring::Builder<S, C>> for PBuilder<S, C> {
+    #[inline]
     fn into(self) -> io_uring::Builder<S, C> {
         self.inner
     }
