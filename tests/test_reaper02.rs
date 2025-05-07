@@ -1,7 +1,7 @@
 use std::{io, thread};
 
 use io_uring::opcode::Nop;
-use io_uring_promise::{cqreaper::CQReaper, rsqueue::RSQueue, PromiseIoUring};
+use io_uring_promise::{PromiseIoUring, cqreaper::CQReaper, rsqueue::RSQueue};
 
 #[test]
 fn main() -> io::Result<()> {
@@ -16,7 +16,9 @@ fn main() -> io::Result<()> {
 
         let mut rsq = RSQueue::new(sq, waker.clone());
 
-        let entries = std::iter::from_fn(|| Some(Nop::new().build())).take(10).collect::<Box<_>>();
+        let entries = std::iter::from_fn(|| Some(Nop::new().build()))
+            .take(10)
+            .collect::<Box<_>>();
 
         let promises = unsafe { rsq.push_multiple(entries).expect("SQ full") };
 

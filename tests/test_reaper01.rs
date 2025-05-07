@@ -25,13 +25,13 @@ fn main() -> io::Result<()> {
         // that the reaper thread (which holds a `CompletionQueue`) does not outlive the `CompletionQueue`'s borrow
         println!("Creating reaper");
         let reaper = CQReaper::new(scope, cq, None);
-        
+
         println!("Waking reaper");
         reaper.wake();
-        
+
         println!("Submit and wait...");
         s.submit_and_wait(10)?;
-        
+
         // When the reaper is dropped, it will automatically reap one last time.
         println!("Dropping reaper");
 

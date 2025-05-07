@@ -1,6 +1,9 @@
 use std::{
     collections::BTreeMap,
-    sync::{atomic::{AtomicU64, Ordering}, Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use io_uring::CompletionQueue;
@@ -67,9 +70,7 @@ impl<C: CQEM> PromiseRegistry<C> {
         cq.sync();
 
         // Greedily aggregate (user_data, entry) pairs to minimize write lock lifetime.
-        let v = cq
-            .map(|e| (e.user_data(), e))
-            .collect::<Vec<_>>();
+        let v = cq.map(|e| (e.user_data(), e)).collect::<Vec<_>>();
 
         cq.sync();
 

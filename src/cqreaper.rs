@@ -3,8 +3,8 @@ use std::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
-    thread::{self, Scope, ScopedJoinHandle},
-    time::{Duration, Instant, SystemTime},
+    thread::{Scope, ScopedJoinHandle},
+    time::{Duration, Instant},
 };
 
 use io_uring::CompletionQueue;
@@ -93,7 +93,7 @@ impl<'s, 'a, C: CQEM> CQReaper<'s, 'a, C> {
 impl<'s, 'a, C: CQEM> Drop for CQReaper<'s, 'a, C> {
     fn drop(&mut self) {
         // Safety: The scoped thread does not need to be joined here
-        // because it is guaranteed to get joined by the time `'scope` expires.
+        // because it is guaranteed to get joined by the time 'scope expires.
         self.kill();
     }
 }
@@ -103,9 +103,9 @@ impl<'s, 'a, C: CQEM> Into<PCompletionQueue<'a, C>> for CQReaper<'s, 'a, C> {
         self.kill();
         self.thread
             .take()
-            // Safety: This is the only way to make `self.thread` == `None`
-            // and it consumes `self` so there is no chance for it to be called
-            // when `self.thread` is `None`.
+            // Safety: This is the only way to make self.thread be None
+            // and it consumes self so there is no chance for it to be called
+            // when self.thread is None.
             .unwrap()
             .join()
             .expect("Failed to join reaper thread")
