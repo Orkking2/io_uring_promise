@@ -3,7 +3,6 @@ use std::io;
 use std::rc::Rc;
 
 use error::Error;
-use io_uring::squeue::PushError;
 use io_uring::{self, IoUring, cqueue, squeue};
 
 use promise::Promise;
@@ -107,8 +106,8 @@ impl<S: SQEM, C: CQEM> PIoUring<S, C> {
     }
 
     /// Safety:
-    ///
-    /// Essentially a mutable reference, treat it like an immutable one and it will panic.
+    /// 
+    /// Ensure that `self.registry` is not already mutably borrowed.
     #[inline]
     pub unsafe fn reap_shared(&self) {
         self.registry

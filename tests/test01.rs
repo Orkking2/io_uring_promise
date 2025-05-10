@@ -9,7 +9,7 @@ fn main() -> io::Result<()> {
 
     let entry = opcode::Nop::new().build();
 
-    let promise = unsafe { ring.submit(entry) }.unwrap();
+    let mut promise = unsafe { ring.submit(entry) }.unwrap();
 
     // do other stuff
     thread::sleep(Duration::from_secs(1));

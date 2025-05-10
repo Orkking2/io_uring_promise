@@ -1,6 +1,6 @@
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 
-use crate::{CQEM, PIoUring, SQEM, pstatus::PromiseStatus, registry::RegRef};
+use crate::{Result, error::Error, pstatus::PromiseStatus, registry::RegRef, PIoUring, CQEM, SQEM};
 
 pub struct Promise<S: SQEM, C: CQEM> {
     ring_ref: PIoUring<S, C>,
@@ -32,7 +32,7 @@ impl<S: SQEM, C: CQEM> Promise<S, C> {
     }
 
     #[inline]
-    pub fn poll(&self) -> PromiseStatus {
+    pub fn status(&self) -> PromiseStatus {
         unsafe {
             self.trigger_reap();
         }
@@ -41,51 +41,17 @@ impl<S: SQEM, C: CQEM> Promise<S, C> {
     }
 
     #[inline]
-    pub fn try_wait(self) -> Result<C, PromiseError<S, C>> {
+    pub fn try_wait(&mut self) -> Result<C> {
         unsafe {
             self.trigger_reap();
         }
 
-        { self.reg_ref.borrow_mut().remove(&self.uuid) }.map_err(|err| PromiseError::new(err, self))
+        { self.reg_ref.borrow_mut().remove(&self.uuid) }.map_err(Error::from)
     }
 }
 
 impl<S: SQEM, C: CQEM> Debug for Promise<S, C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Promise").field("uuid", &self.uuid).finish()
-    }
-}
-
-#[derive(Debug)]
-pub struct PromiseError<S: SQEM, C: CQEM> {
-    pub status: PromiseStatus,
-    pub promise: Promise<S, C>,
-}
-
-impl<S: SQEM, C: CQEM> PromiseError<S, C> {
-    #[inline]
-    pub fn new(status: PromiseStatus, promise: Promise<S, C>) -> Self {
-        Self { status, promise }
-    }
-
-    #[inline]
-    pub fn get_promise(self) -> Promise<S, C> {
-        self.promise
-    }
-}
-
-impl<S: SQEM, C: CQEM> Into<Promise<S, C>> for PromiseError<S, C> {
-    fn into(self) -> Promise<S, C> {
-        self.get_promise()
-    }
-}
-
-impl<S: SQEM, C: CQEM> Display for PromiseError<S, C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "promise has status {} instead of `Complete`",
-            &self.status
-        )
     }
 }
