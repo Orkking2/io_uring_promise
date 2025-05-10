@@ -1,0 +1,9 @@
+General philosophy:
+1) Every thread's polling/try_wait/wait begins a process of reaping the completion queue
+    a) For single-threaded it will contain an Rc<Refcell<CQ>>
+    b) For multi-threaded it will contain a way to wake the reaper thread
+2) The user should not have to worry about sync-ing the S or C queue
+3) The user should not have to worry about submission
+    When a promise is created, the user can rightfully assume that it is being filled automatically.
+    Methods which do not submit/do not sync will be available to the user.
+

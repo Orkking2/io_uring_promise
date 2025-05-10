@@ -18,6 +18,7 @@ pub struct CQReaper<'s, 'a, C: CQEM> {
 }
 
 impl<'s, 'a, C: CQEM> CQReaper<'s, 'a, C> {
+    #[inline]
     pub fn new(
         scope: &'s Scope<'s, 'a>,
         cq: PCompletionQueue<'a, C>,
@@ -51,6 +52,7 @@ impl<'s, 'a, C: CQEM> CQReaper<'s, 'a, C> {
         self.wake();
     }
 
+    #[inline]
     fn thread_generator(
         scope: &'s Scope<'s, 'a>,
         cq: PCompletionQueue<'a, C>,
@@ -61,6 +63,7 @@ impl<'s, 'a, C: CQEM> CQReaper<'s, 'a, C> {
         Some(scope.spawn(Self::thread_fn_generator(cq, wake, kill, timeout)))
     }
 
+    #[inline]
     fn thread_fn_generator(
         mut cq: PCompletionQueue<'a, C>,
         waker: Arc<RTWaker>,
@@ -91,14 +94,16 @@ impl<'s, 'a, C: CQEM> CQReaper<'s, 'a, C> {
 }
 
 impl<'s, 'a, C: CQEM> Drop for CQReaper<'s, 'a, C> {
+    #[inline]
     fn drop(&mut self) {
         // Safety: The scoped thread does not need to be joined here
-        // because it is guaranteed to get joined by the time 'scope expires.
+        // because it is guaranteed to get joined by the time 's expires.
         self.kill();
     }
 }
 
 impl<'s, 'a, C: CQEM> Into<PCompletionQueue<'a, C>> for CQReaper<'s, 'a, C> {
+    #[inline]
     fn into(mut self) -> PCompletionQueue<'a, C> {
         self.kill();
         self.thread
@@ -113,6 +118,7 @@ impl<'s, 'a, C: CQEM> Into<PCompletionQueue<'a, C>> for CQReaper<'s, 'a, C> {
 }
 
 impl<'s, 'a, C: CQEM> Into<CompletionQueue<'a, C>> for CQReaper<'s, 'a, C> {
+    #[inline]
     fn into(self) -> CompletionQueue<'a, C> {
         <Self as Into<PCompletionQueue<'a, C>>>::into(self).into()
     }
@@ -124,6 +130,7 @@ pub struct RTWaker {
 }
 
 impl RTWaker {
+    #[inline]
     pub fn new(init: bool) -> Self {
         Self {
             wakebool: Mutex::new(init),
@@ -131,10 +138,12 @@ impl RTWaker {
         }
     }
 
+    #[inline]
     fn get_lock(&self) -> MutexGuard<'_, bool> {
         self.wakebool.lock().unwrap()
     }
 
+    #[inline]
     pub fn wait(&self) {
         let mut guard = self.get_lock();
         while !*guard {
@@ -143,6 +152,7 @@ impl RTWaker {
         *guard = false;
     }
 
+    #[inline]
     pub fn wake(&self) {
         *self.get_lock() = true;
         self.wakecv.notify_all();

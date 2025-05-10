@@ -1,83 +1,121 @@
 use std::{
-    collections::BTreeMap,
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
-    },
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
 };
 
-use io_uring::CompletionQueue;
+use crate::{CQEM, pstatus::PromiseStatus};
 
-use crate::CQEM;
+pub type RegRef<C> = Rc<RefCell<PromiseRegistry<C>>>;
 
-static WERR: &'static str = "Failed to obtain write lock";
-static RERR: &'static str = "Failed to obtain read lock";
-
-pub type PRegRef<C> = Arc<PromiseRegistry<C>>;
-
-pub fn new_preg_ref<C: CQEM>() -> PRegRef<C> {
-    Arc::new(PromiseRegistry::new())
+pub fn new_reg_ref<C: CQEM>() -> RegRef<C> {
+    Rc::new(RefCell::new(PromiseRegistry::new()))
 }
 
 pub struct PromiseRegistry<C: CQEM> {
-    inner: RwLock<BTreeMap<u64, C>>,
-    curr_uuid: AtomicU64,
+    completed: HashMap<u64, C>,
+    scheduled: HashSet<u64>,
+    curr_uuid: u64,
 }
 
 impl<C: CQEM> PromiseRegistry<C> {
     #[inline]
     pub fn new() -> Self {
         Self {
-            inner: RwLock::new(BTreeMap::new()),
-            curr_uuid: AtomicU64::new(0),
+            completed: HashMap::new(),
+            scheduled: HashSet::new(),
+            curr_uuid: 0,
         }
     }
 
     #[inline]
-    fn next_uuid(&self) -> u64 {
-        self.curr_uuid.fetch_add(1, Ordering::Relaxed)
+    pub fn curr_uuid(&self) -> u64 {
+        self.curr_uuid
     }
 
     #[inline]
-    pub fn get_uuid(&self) -> u64 {
-        let mut uuid = self.next_uuid();
+    fn incr_uuid(&mut self) -> u64 {
+        let out = self.curr_uuid;
+        self.curr_uuid = self.curr_uuid.wrapping_add(1);
+        out
+    }
 
-        // Ensure that this registry does not contain this id already
-        while self.contains_key(&uuid) {
-            uuid = self.next_uuid()
+    #[inline]
+    pub fn next_uuid(&mut self) -> u64 {
+        loop {
+            let id = self.incr_uuid();
+            if self.get_status(&id) == PromiseStatus::None {
+                break id;
+            }
         }
-
-        uuid
     }
 
     #[inline]
-    pub fn contains_key(&self, uuid: &u64) -> bool {
-        self.inner.read().expect(RERR).contains_key(uuid)
+    pub fn get_status(&self, k: &u64) -> PromiseStatus {
+        if self.completed.contains_key(k) {
+            PromiseStatus::Completed
+        } else if self.scheduled.contains(k) {
+            PromiseStatus::Scheduled
+        } else {
+            PromiseStatus::None
+        }
+    }
+
+    /// PromiseStatus tells you in what state the promise is, either it is scheduled or the key does not exist.
+    #[inline]
+    pub fn remove(&mut self, k: &u64) -> Result<C, PromiseStatus> {
+        if let Some(entry) = self.completed.remove(k) {
+            Ok(entry)
+        } else {
+            Err(self.get_status(k))
+        }
+    }
+
+    /// Returns `false` if a promise with this user_data was already scheduled.
+    #[inline]
+    pub fn schedule(&mut self, user_data: u64) -> bool {
+        self.scheduled.insert(user_data)
+    }
+
+    /// Returns `true` if a promise was successfully unscheduled.
+    #[inline]
+    pub fn unschedule(&mut self, user_data: &u64) -> bool {
+        self.scheduled.remove(user_data)
     }
 
     #[inline]
-    pub fn remove(&self, uuid: &u64) -> Option<C> {
-        self.inner.write().expect(WERR).remove(uuid)
+    fn extract_user_data(entry: C) -> (u64, C) {
+        let user_data = entry.user_data();
+
+        (user_data, entry)
     }
 
+    /// Returns the completed promise that this call overwrites, if it exists.
     #[inline]
-    pub fn insert(&self, uuid: u64, cqe: C) {
-        self.inner.write().expect(WERR).insert(uuid, cqe);
+    pub fn complete(&mut self, entry: C) -> Option<C> {
+        let (user_data, entry) = Self::extract_user_data(entry);
+
+        self.unschedule(&user_data);
+
+        self.completed.insert(user_data, entry)
     }
 
+    /// Complete a batch of entries.
     #[inline]
-    pub fn reap(&self, cq: &mut CompletionQueue<'_, C>) -> usize {
-        cq.sync();
+    pub fn batch_complete<I>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = C>,
+    {
+        self.completed
+            .extend(
+                entries
+                    .into_iter()
+                    .map(Self::extract_user_data)
+                    .map(|(user_data, entry)| {
+                        self.scheduled.remove(&user_data);
 
-        // Greedily aggregate (user_data, entry) pairs to minimize write lock lifetime.
-        let v = cq.map(|e| (e.user_data(), e)).collect::<Vec<_>>();
-
-        cq.sync();
-
-        let reaped = v.len();
-
-        self.inner.write().expect(WERR).extend(v);
-
-        reaped
+                        (user_data, entry)
+                    }),
+            )
     }
 }

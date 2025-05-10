@@ -1,10 +1,13 @@
-pub mod cqreaper;
-pub mod pcqueue;
-pub mod promise;
-pub mod psqueue;
-pub mod registry;
-pub mod rpromise;
-pub mod rsqueue;
+use std::cell::RefCell;
+use std::io;
+use std::rc::Rc;
+
+use error::Error;
+use io_uring::squeue::PushError;
+use io_uring::{self, IoUring, cqueue, squeue};
+
+use promise::Promise;
+use registry::{RegRef, new_reg_ref};
 
 #[rustfmt::skip]
 use squeue::Entry as SQE;
@@ -12,157 +15,104 @@ use cqueue::Entry as CQE;
 use cqueue::EntryMarker as CQEM;
 use squeue::EntryMarker as SQEM;
 
-use io_uring::Submitter;
-use pcqueue::PCompletionQueue;
-use psqueue::PSubmissionQueue;
+pub mod multithread;
 
-use std::{
-    io,
-    ops::{Deref, DerefMut},
-};
+pub mod error;
+pub mod promise;
+pub mod pstatus;
+pub mod registry;
 
-use io_uring::{IoUring, cqueue, squeue};
+pub type RingRef<S, C> = Rc<RefCell<IoUring<S, C>>>;
+pub type Result<T> = std::result::Result<T, Error>;
 
-use crate::registry::{PRegRef, new_preg_ref};
-
-pub struct PromiseIoUring<S: SQEM = SQE, C: CQEM = CQE> {
-    ring: IoUring<S, C>,
-    registry: PRegRef<C>,
+#[derive(Clone /* This type should be extremely cheap to clone. */)]
+pub struct PIoUring<S: SQEM = SQE, C: CQEM = CQE> {
+    ring: RingRef<S, C>,
+    registry: RegRef<C>,
 }
 
-impl PromiseIoUring<SQE, CQE> {
+impl<S: SQEM, C: CQEM> PIoUring<S, C> {
     #[inline]
-    pub fn new(entries: u32) -> io::Result<Self> {
-        IoUring::new(entries).map(<Self as From<IoUring<SQE, CQE>>>::from)
-    }
-}
-
-impl<S: SQEM, C: CQEM> PromiseIoUring<S, C> {
-    #[inline]
-    pub fn get_reg(&self) -> PRegRef<C> {
-        self.registry.clone()
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn builder() -> PBuilder<S, C> {
-        IoUring::builder().into()
-    }
-
-    #[inline]
-    pub fn reap(&mut self) -> usize {
-        self.completion().reap()
-    }
-
-    #[inline]
-    pub fn split(
-        &mut self,
-    ) -> (
-        Submitter<'_>,
-        PSubmissionQueue<'_, S, C>,
-        PCompletionQueue<'_, C>,
-    ) {
-        (
-            self.submitter(),
-            unsafe { self.submission_shared() },
-            unsafe { self.completion_shared() },
-        )
-    }
-
-    #[inline]
-    pub fn submission(&mut self) -> PSubmissionQueue<'_, S, C> {
-        unsafe { self.submission_shared() }
-    }
-
-    #[inline]
-    pub unsafe fn submission_shared(&self) -> PSubmissionQueue<'_, S, C> {
-        PSubmissionQueue::new_with_reg(unsafe { self.deref().submission_shared() }, self.get_reg())
-    }
-
-    #[inline]
-    pub fn completion(&mut self) -> PCompletionQueue<'_, C> {
-        unsafe { self.completion_shared() }
-    }
-
-    #[inline]
-    pub unsafe fn completion_shared(&self) -> PCompletionQueue<'_, C> {
-        PCompletionQueue::new(unsafe { self.deref().completion_shared() }, self.get_reg())
-    }
-}
-
-impl<S: SQEM, C: CQEM> Deref for PromiseIoUring<S, C> {
-    type Target = IoUring<S, C>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.ring
-    }
-}
-
-impl<S: SQEM, C: CQEM> DerefMut for PromiseIoUring<S, C> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.ring
-    }
-}
-
-impl<S: SQEM, C: CQEM> Into<IoUring<S, C>> for PromiseIoUring<S, C> {
-    #[inline]
-    fn into(self) -> IoUring<S, C> {
-        self.ring
-    }
-}
-
-impl<S: SQEM, C: CQEM> From<IoUring<S, C>> for PromiseIoUring<S, C> {
-    #[inline]
-    fn from(uring: IoUring<S, C>) -> Self {
+    pub fn new(ring: IoUring<S, C>) -> Self {
         Self {
-            ring: uring,
-            registry: new_preg_ref(),
+            ring: Rc::new(RefCell::new(ring)),
+            registry: new_reg_ref(),
         }
     }
-}
 
-#[derive(Clone, Default)]
-pub struct PBuilder<S: SQEM = SQE, C: CQEM = CQE> {
-    inner: io_uring::Builder<S, C>,
-}
-
-impl<S: SQEM, C: CQEM> PBuilder<S, C> {
     #[inline]
-    pub fn build(&self, entries: u32) -> io::Result<PromiseIoUring<S, C>> {
-        self.inner
-            .build(entries)
-            .map(<PromiseIoUring<S, C> as From<IoUring<S, C>>>::from)
+    fn new_promise(&mut self, entry: S) -> (Promise<S, C>, S) {
+        let user_data = self.registry.borrow_mut().next_uuid();
+
+        let entry = entry.set_user_data(user_data);
+        let promise = Promise::new(user_data, self.registry.clone(), self.clone());
+
+        (promise, entry)
     }
-}
-
-impl<S: SQEM, C: CQEM> Deref for PBuilder<S, C> {
-    type Target = io_uring::Builder<S, C>;
 
     #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.inner
+    pub fn schedule_promise(&mut self, promise: Promise<S, C>) -> Promise<S, C> {
+        self.registry.borrow_mut().schedule(promise.get_uuid());
+
+        promise
     }
-}
 
-impl<S: SQEM, C: CQEM> DerefMut for PBuilder<S, C> {
     #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+    pub fn trigger_submitter(&self) -> io::Result<usize> {
+        self.ring.borrow().submit()
     }
-}
 
-impl<S: SQEM, C: CQEM> From<io_uring::Builder<S, C>> for PBuilder<S, C> {
     #[inline]
-    fn from(inner: io_uring::Builder<S, C>) -> Self {
-        Self { inner }
+    pub unsafe fn submit(&mut self, entry: S) -> Result<Promise<S, C>> {
+        let (promise, entry) = self.new_promise(entry);
+
+        unsafe { self.ring.borrow_mut().submission().push(entry) }
+            .map_err(Error::from)
+            .map(|()| self.schedule_promise(promise))
+            .and_then(|promise| {
+                self.trigger_submitter()
+                    .map(|_| promise)
+                    .map_err(Error::from)
+            })
     }
-}
 
-impl<S: SQEM, C: CQEM> Into<io_uring::Builder<S, C>> for PBuilder<S, C> {
     #[inline]
-    fn into(self) -> io_uring::Builder<S, C> {
-        self.inner
+    pub unsafe fn batch_submit<T, I>(&mut self, entries: T) -> Result<Box<[Promise<S, C>]>>
+    where
+        I: ExactSizeIterator<Item = S>,
+        T: IntoIterator<IntoIter = I>,
+    {
+        let (promises, entries): (Vec<_>, Vec<_>) = entries
+            .into_iter()
+            .map(|entry| self.new_promise(entry))
+            .unzip();
+
+        let (promises, entries) = (promises.into_boxed_slice(), entries.into_boxed_slice());
+
+        let promises = {
+            unsafe { self.ring.borrow_mut().submission().push_multiple(entries) }
+                .map_err(Error::from)?;
+
+            promises.into_iter().map(|promise| self.schedule_promise(promise)).collect::<Box<_>>()
+        };
+
+        self.trigger_submitter()?;
+
+        Ok(promises)
+    }
+
+    #[inline]
+    pub fn reap(&mut self) {
+        unsafe { self.reap_shared() };
+    }
+
+    /// Safety:
+    ///
+    /// Essentially a mutable reference, treat it like an immutable one and it will panic.
+    #[inline]
+    pub unsafe fn reap_shared(&self) {
+        self.registry
+            .borrow_mut()
+            .batch_complete(self.ring.borrow_mut().completion());
     }
 }

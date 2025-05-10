@@ -94,6 +94,18 @@ impl<'a, S: SQEM, C: CQEM> PSubmissionQueue<'a, S, C> {
 
         res
     }
+
+    #[inline]
+    pub fn sync_wrap<F, Args, R>(&mut self, func: F, args: Args) -> R
+    where
+        F: Fn(&mut Self, Args) -> R,
+    {
+        self.sync();
+        let ret = func(self, args);
+        self.sync();
+
+        ret
+    }
 }
 
 impl<'a, S: SQEM, C: CQEM> Deref for PSubmissionQueue<'a, S, C> {

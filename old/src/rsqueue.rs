@@ -5,6 +5,9 @@ use std::{
 
 use crate::{CQEM, SQEM, cqreaper::RTWaker, psqueue::PSubmissionQueue, rpromise::RPromise};
 
+// Move pushing operation to Reaper thread since we have a waker for that here anyway.
+// Give the RSQueue
+
 pub struct RSQueue<'a, S: SQEM, C: CQEM> {
     sq: PSubmissionQueue<'a, S, C>,
     waker: Arc<RTWaker>,

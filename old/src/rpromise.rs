@@ -43,6 +43,7 @@ impl<C: CQEM> DerefMut for RPromise<C> {
 }
 
 impl<C: CQEM> Into<Promise<C>> for RPromise<C> {
+    #[inline]
     fn into(self) -> Promise<C> {
         self.inner
     }
