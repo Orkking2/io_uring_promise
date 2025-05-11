@@ -1,14 +1,17 @@
 use std::{
-    sync::{mpsc::{channel, Receiver, Sender}, RwLockWriteGuard},
+    sync::{
+        RwLockWriteGuard,
+        mpsc::{Receiver, Sender, channel},
+    },
     thread,
 };
 
 use io_uring::IoUring;
 use promise::Promise;
-use registry::{new_reg_ref, RegRef};
+use registry::{RegRef, new_reg_ref};
 use signal::Signal;
 
-use crate::{registry::PromiseRegistry, CQE, CQEM, SQE, SQEM};
+use crate::{CQE, CQEM, SQE, SQEM, registry::PromiseRegistry};
 
 pub mod promise;
 pub mod registry;
@@ -28,14 +31,11 @@ impl<S: SQEM + 'static, C: CQEM + 'static> PIoUring<S, C> {
     pub fn new(ring: IoUring<S, C>) -> Self {
         let (sender, receiver) = channel();
         let reg_ref = new_reg_ref();
-        
+
         // This thread naturally joins when the last sender is dropped.
         thread::spawn(Self::thread_fn_generator(ring, receiver, reg_ref.clone()));
 
-        Self {
-            sender,
-            reg_ref,
-        }
+        Self { sender, reg_ref }
     }
 
     #[inline]
@@ -44,19 +44,36 @@ impl<S: SQEM + 'static, C: CQEM + 'static> PIoUring<S, C> {
         receiver: Receiver<Signal<S>>,
         reg_ref: RegRef<C>,
     ) -> impl FnOnce() -> () {
+        fn handle_reap<S: SQEM, C: CQEM>(ring: &mut IoUring<S, C>, reg_ref: &RegRef<C>) {
+            reg_ref
+                .write()
+                .expect(WERR)
+                .batch_complete(ring.completion());
+        }
+
+        fn handle_entry<S: SQEM, C: CQEM>(ring: &mut IoUring<S, C>, reg_ref: &RegRef<C>, user_data: u64, entry: S) {
+            loop {
+                if unsafe { ring.submission().push(entry.clone()) }.is_ok() {
+                    ring.submit().unwrap();
+                    reg_ref.write().expect(WERR).schedule(user_data);
+                    break;
+                } else {
+                    // Maybe the CQ is full because the SQ is full
+                    handle_reap(ring, reg_ref);
+                }
+            }
+        }
+
+        // And then in your closure:
         move || {
             for signal in receiver.into_iter() {
                 match signal {
-                    Signal::Entry(user_data, entry) => loop {
-                        if unsafe { ring.submission().push(entry.clone()) }.is_ok() {
-                            ring.submit().unwrap();
-                            reg_ref.write().expect(WERR).schedule(user_data);
-                            break;
-                        }
-                    },
+                    Signal::Entry(user_data, entry) => {
+                        handle_entry(&mut ring, &reg_ref, user_data, entry);
+                    }
                     Signal::Reap => {
-                        reg_ref.write().expect(WERR).batch_complete(ring.completion());
-                    },
+                        handle_reap(&mut ring, &reg_ref);
+                    }
                 }
             }
         }
@@ -102,6 +119,9 @@ impl<S: SQEM + 'static, C: CQEM + 'static> PIoUring<S, C> {
         I: ExactSizeIterator<Item = S>,
         T: IntoIterator<IntoIter = I>,
     {
-        entries.into_iter().map(|entry| unsafe { self.submit(entry) }).collect::<Box<_>>()
+        entries
+            .into_iter()
+            .map(|entry| unsafe { self.submit(entry) })
+            .collect::<Box<_>>()
     }
 }
