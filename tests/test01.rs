@@ -1,6 +1,6 @@
 use std::{io, thread, time::Duration};
 
-use io_uring::{opcode, IoUring};
+use io_uring::{IoUring, opcode};
 use io_uring_promise::PIoUring;
 
 #[test]

@@ -1,8 +1,6 @@
 use std::{io, os::fd::AsRawFd, thread};
 
-use io_uring::{
-    opcode, types, IoUring
-};
+use io_uring::{IoUring, opcode, types};
 use io_uring_promise::{CQE, SQE, multithread::PIoUring, pstatus::PromiseStatus};
 use tempfile::tempfile;
 
@@ -17,8 +15,12 @@ fn gen_thread_fn(ring: PIoUring<SQE, CQE>, id: usize, num_entries: usize) -> imp
         let promises = unsafe {
             ring.batch_submit(
                 std::iter::repeat(
-                    opcode::Write::new(types::Fd(fs.as_raw_fd()), buf.as_ptr() as _, buf.len() as _)
-                        .build(),
+                    opcode::Write::new(
+                        types::Fd(fs.as_raw_fd()),
+                        buf.as_ptr() as _,
+                        buf.len() as _,
+                    )
+                    .build(),
                 )
                 .take(num_entries),
             )

@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{Result, error::Error, pstatus::PromiseStatus, registry::RegRef, PIoUring, CQEM, SQEM};
+use crate::{CQEM, PIoUring, Result, SQEM, error::Error, pstatus::PromiseStatus, registry::RegRef};
 
 pub struct Promise<S: SQEM, C: CQEM> {
     ring_ref: PIoUring<S, C>,

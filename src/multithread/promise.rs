@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use crate::{CQEM, Result, SQEM, error::Error, pstatus::PromiseStatus};
 
-use super::{registry::RegRef, PIoUring, RERR, WERR};
+use super::{PIoUring, RERR, WERR, registry::RegRef};
 
 pub struct Promise<S: SQEM + 'static, C: CQEM + 'static> {
     sender: PIoUring<S, C>,

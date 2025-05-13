@@ -8,7 +8,7 @@ use crate::pstatus::PromiseStatus;
 pub enum Error {
     Push,
     IO(io::Error),
-    Promise(PromiseStatus)
+    Promise(PromiseStatus),
 }
 
 impl From<PushError> for Error {
@@ -34,7 +34,7 @@ impl Display for Error {
         match self {
             Error::Push => write!(f, "submission queue is full"),
             Error::IO(error) => write!(f, "io error: {error}"),
-            Error::Promise(status) => write!(f, "promise not ready; has status {status}")
+            Error::Promise(status) => write!(f, "promise not ready; has status {status}"),
         }
     }
 }

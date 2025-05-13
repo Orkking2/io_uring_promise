@@ -4,7 +4,7 @@ use std::fmt::Display;
 pub enum PromiseStatus {
     Scheduled,
     Completed,
-    None
+    None,
 }
 
 impl Display for PromiseStatus {

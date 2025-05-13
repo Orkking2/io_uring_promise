@@ -92,7 +92,10 @@ impl<S: SQEM, C: CQEM> PIoUring<S, C> {
             unsafe { self.ring.borrow_mut().submission().push_multiple(entries) }
                 .map_err(Error::from)?;
 
-            promises.into_iter().map(|promise| self.schedule_promise(promise)).collect::<Box<_>>()
+            promises
+                .into_iter()
+                .map(|promise| self.schedule_promise(promise))
+                .collect::<Box<_>>()
         };
 
         self.trigger_submitter()?;
@@ -106,7 +109,7 @@ impl<S: SQEM, C: CQEM> PIoUring<S, C> {
     }
 
     /// Safety:
-    /// 
+    ///
     /// Ensure that `self.registry` is not already mutably borrowed.
     #[inline]
     pub unsafe fn reap_shared(&self) {
