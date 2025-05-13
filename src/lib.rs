@@ -9,10 +9,10 @@ use promise::Promise;
 use registry::{RegRef, new_reg_ref};
 
 #[rustfmt::skip]
-use squeue::Entry as SQE;
-use cqueue::Entry as CQE;
-use cqueue::EntryMarker as CQEM;
-use squeue::EntryMarker as SQEM;
+pub use squeue::Entry as SQE;
+pub use cqueue::Entry as CQE;
+pub use cqueue::EntryMarker as CQEM;
+pub use squeue::EntryMarker as SQEM;
 
 pub mod multithread;
 
