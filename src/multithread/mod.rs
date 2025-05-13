@@ -44,38 +44,43 @@ impl<S: SQEM + 'static, C: CQEM + 'static> PIoUring<S, C> {
         receiver: Receiver<Signal<S>>,
         reg_ref: RegRef<C>,
     ) -> impl FnOnce() -> () {
-        fn handle_reap<S: SQEM, C: CQEM>(ring: &mut IoUring<S, C>, reg_ref: &RegRef<C>) {
-            reg_ref
-                .write()
-                .expect(WERR)
-                .batch_complete(ring.completion());
-        }
-
-        fn handle_entry<S: SQEM, C: CQEM>(ring: &mut IoUring<S, C>, reg_ref: &RegRef<C>, user_data: u64, entry: S) {
-            loop {
-                if unsafe { ring.submission().push(entry.clone()) }.is_ok() {
-                    ring.submit().unwrap();
-                    reg_ref.write().expect(WERR).schedule(user_data);
-                    break;
-                } else {
-                    // Maybe the CQ is full because the SQ is full
-                    handle_reap(ring, reg_ref);
-                }
-            }
-        }
-
-        // And then in your closure:
         move || {
-            for signal in receiver.into_iter() {
+            let reap = |ring: &mut IoUring<S, C>, reg_ref: &RegRef<C>| {
+                reg_ref
+                    .write()
+                    .expect(WERR)
+                    .batch_complete(ring.completion());
+            };
+
+            // Blocks when there are no `Signal`s to consume.
+            for signal in receiver {
                 match signal {
-                    Signal::Entry(user_data, entry) => {
-                        handle_entry(&mut ring, &reg_ref, user_data, entry);
+                    Signal::Entry(entry) => {
+                        // Loops until submission of entry is successful.
+                        loop {
+                            // Fails if the SQ is full, possible if we are handed a ring with a full SQ or
+                            // we have been pushing SQEs and not reaping their CQEs.
+                            if unsafe { ring.submission().push(entry.clone()) }.is_ok() {
+                                // Inform the kernel of our new submission.
+                                ring.submit().unwrap();
+                                // Schedule the promise.
+                                reg_ref.write().expect(WERR).schedule(entry.get_user_data());
+                                break;
+                            } else {
+                                // The SQ could be full because the CQ is full.
+                                reap(&mut ring, &reg_ref);
+                                // CQ is now empty, so we should wake the kernel.
+                                ring.submit().unwrap();
+                            }
+                        }
                     }
                     Signal::Reap => {
-                        handle_reap(&mut ring, &reg_ref);
+                        reap(&mut ring, &reg_ref);
                     }
                 }
             }
+            // Thread joins when receiver produces a `None`, which happens when the last sender (PIoUring) gets dropped.
+            // This means we don't actually have to keep track of this thread at all, it will take care of itself.
         }
     }
 
@@ -108,16 +113,15 @@ impl<S: SQEM + 'static, C: CQEM + 'static> PIoUring<S, C> {
     pub unsafe fn submit(&self, entry: S) -> Promise<S, C> {
         let (promise, entry) = self.new_promise(entry);
 
-        self.send(Signal::Entry(promise.get_uuid(), entry));
+        self.send(Signal::Entry(entry));
 
         promise
     }
 
     #[inline]
-    pub unsafe fn batch_submit<T, I>(&self, entries: T) -> Box<[Promise<S, C>]>
+    pub unsafe fn batch_submit<I>(&self, entries: I) -> Box<[Promise<S, C>]>
     where
-        I: ExactSizeIterator<Item = S>,
-        T: IntoIterator<IntoIter = I>,
+        I: IntoIterator<Item = S>,
     {
         entries
             .into_iter()
